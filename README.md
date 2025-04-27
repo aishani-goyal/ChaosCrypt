@@ -13,7 +13,7 @@ _An advanced encryption tool combining Chaos Theory and AES for secure file encr
 ---
 
 ### 📂 **Supported File Formats**  
-- `.txt`, `.docx`, `.jpg`, `.jpeg`, `.png`
+- `.txt`, `.docx`, `.pdf`, `.jpg`, `.jpeg`, `.png`
 
 ---
 
