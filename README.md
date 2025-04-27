@@ -35,6 +35,6 @@ For decryption, use the same .key file!
 - AES-CBC encryption with random IV.
 - Key file contains necessary r, seed, and AES key.
 
-License
-This project is open source and free to use.
+**License**
+-This project is open source and free to use.
 
