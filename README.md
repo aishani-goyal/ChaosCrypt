@@ -21,12 +21,19 @@
   - Choose to generate or load a key file.
 
 **Usage Example**
+
 Enter file path to encrypt/decrypt: sample.jpg
+
 Mode (e = encrypt / d = decrypt): e
+
 Use existing key file? (y/n): n
+
 [+] Key file saved as: encryption.key
+
 [+] Encrypted image saved to: sample.jpg.enc
+
 [+] Original image sample.jpg deleted.
+
 For decryption, use the same .key file!
 
 **Security Highlights**
