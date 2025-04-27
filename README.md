@@ -36,5 +36,5 @@ For decryption, use the same .key file!
 - Key file contains necessary r, seed, and AES key.
 
 **License**
--This project is open source and free to use.
+- This project is open source and free to use.
 
