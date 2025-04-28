@@ -66,12 +66,12 @@ def encrypt_file(file_path, r, seed, aes_key, arnold_iter=5):
     with open(file_path, 'rb') as f:
         content = f.read()
 
-    if ext in ['.txt', '.docx']:   # <- both are treated similarly now
+    if ext in ['.txt', '.docx', '.pdf']:   # <- both are treated similarly now
         chaotic_seq = logistic_map(seed, r, len(content))
         xored = xor_data(content, chaotic_seq)
         encrypted = aes_encrypt(xored, aes_key)
 
-        out_path = file_path + ".enc"
+        out_path = file_path + '.enc'
         with open(out_path, 'wb') as f:
             f.write(encrypted)
         print(f"[+] Encrypted file saved to: {out_path}")
@@ -92,7 +92,7 @@ def encrypt_file(file_path, r, seed, aes_key, arnold_iter=5):
         xored = xor_data(scrambled.flatten(), chaotic_seq)
         encrypted = aes_encrypt(xored, aes_key)
 
-        out_path = file_path + ".enc"
+        out_path = file_path + '.enc'
         with open(out_path, 'wb') as f:
             f.write(encrypted)
         print(f"[+] Encrypted image saved to: {out_path}")
