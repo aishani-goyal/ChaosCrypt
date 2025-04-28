@@ -1,5 +1,4 @@
-# chaos_aes_gradio_app.py
-
+#LIBRARIES
 import numpy as np
 from Crypto.Cipher import AES
 from Crypto.Util.Padding import pad, unpad
@@ -81,7 +80,7 @@ def load_key_file(key_path):
 
 def encrypt_file(file_path, r, seed, aes_key):
     ext = os.path.splitext(file_path)[1].lower()
-    if ext in ['.txt', '.docx']:
+    if ext in ['.txt', '.docx', '.pdf']:
         with open(file_path, "rb") as f:
             data = f.read()
         encrypted_data = chaos_encrypt(data, r, seed)
@@ -92,25 +91,24 @@ def encrypt_file(file_path, r, seed, aes_key):
         img = Image.open(file_path)
         img = img.convert('RGB')
         img_data = np.array(img)
-        size = img_data.shape[0]
         if img_data.shape[0] != img_data.shape[1]:
             min_side = min(img_data.shape[:2])
             img_data = img_data[:min_side, :min_side]
         img_data = arnold_cat_map(img_data, 5)
         img_bytes = img_data.tobytes()
         encrypted_bytes = chaos_encrypt(img_bytes, r, seed)
-        encrypted_img_data = np.frombuffer(encrypted_bytes, dtype=np.uint8).reshape(img_data.shape)
-        encrypted_img = Image.fromarray(encrypted_img_data)
-        encrypted_img.save(file_path + ".enc")
+        with open(file_path + ".enc", "wb") as f:  
+            f.write(encrypted_bytes)
     else:
         raise ValueError("Unsupported file format")
     os.remove(file_path)
+
 
 def decrypt_file(file_path, r, seed, aes_key):
     ext = os.path.splitext(file_path)[1].lower()
     original_ext = os.path.splitext(file_path[:-4])[1].lower()
 
-    if original_ext in ['.txt', '.docx']:
+    if original_ext in ['.txt', '.docx', '.pdf']:
         with open(file_path, "rb") as f:
             data = f.read()
         decrypted_data = aes_decrypt(data, aes_key)
