@@ -1,208 +1,320 @@
-#LIBRARIES
+import gradio as gr
+import os
+import cv2
 import numpy as np
+import base64
+from docx import Document
 from Crypto.Cipher import AES
 from Crypto.Util.Padding import pad, unpad
-import os
-import struct
-from PIL import Image
-import io
-import docx
-import gradio as gr
+from Crypto.Random import get_random_bytes
+import json
+import random
+import string
+from PyPDF2 import PdfReader, PdfWriter
+import hashlib
+import tempfile
 
-# --------------------------
-# Encryption & Decryption Functions
-# --------------------------
-
-def logistic_map(x, r, n):
-    sequence = []
-    for _ in range(n):
+# --- All your existing chaos and encryption functions go here ---
+# (Keep all the functions from your original code: logistic_map, xor_data, 
+#  arnold_cat_map, inverse_arnold_cat_map, aes_encrypt, aes_decrypt, 
+#  get_key_from_password, etc.)
+# --- Chaos Functions ---
+def logistic_map(seed, r, size):
+    """
+    Generate a chaotic sequence based on the Logistic Map.
+    :param seed: Initial value (float between 0 and 1)
+    :param r: Growth rate (chaotic behavior when 3.57 < r <= 4)
+    :param size: Length of sequence needed
+    :return: List of integers in [0,255]
+    """
+    x = seed
+    chaotic_seq = []
+    for _ in range(size):
         x = r * x * (1 - x)
-        sequence.append(int(x * 256) % 256)
-    return np.array(sequence, dtype=np.uint8)
+        chaotic_seq.append(int(x * 255) % 256)  # Normalize to 0-255
+    return chaotic_seq
 
-def arnold_cat_map(img_array, iterations):
-    N = img_array.shape[0]
-    result = np.copy(img_array)
+def xor_data(data_bytes, chaotic_seq):
+    """
+    XOR each byte of data with chaotic sequence.
+    :param data_bytes: Original byte data
+    :param chaotic_seq: Chaotic sequence
+    :return: XORed bytes
+    """
+    return bytes([b ^ chaotic_seq[i % len(chaotic_seq)] for i, b in enumerate(data_bytes)])
+
+# --- Arnold Cat Map for image scrambling ---
+def arnold_cat_map(channel, iterations):
+    """
+    Apply Arnold Cat Map scrambling to a single image channel.
+    :param channel: 2D numpy array (single channel)
+    :param iterations: Number of scrambling iterations
+    :return: Scrambled channel
+    """
+    N = channel.shape[0]
     for _ in range(iterations):
-        temp = np.copy(result)
+        new_channel = np.zeros_like(channel)
         for x in range(N):
             for y in range(N):
-                result[x, y] = temp[(x + y) % N, (x + 2 * y) % N]
-    return result
+                new_x = (x + y) % N
+                new_y = (x + 2 * y) % N
+                new_channel[new_x, new_y] = channel[x, y]
+        channel = new_channel
+    return channel
 
-def inverse_arnold_cat_map(img_array, iterations):
-    N = img_array.shape[0]
-    result = np.copy(img_array)
+def inverse_arnold_cat_map(channel, iterations):
+    """
+    Apply inverse Arnold Cat Map descrambling to a single image channel.
+    :param channel: 2D numpy array (single channel)
+    :param iterations: Number of descrambling iterations
+    :return: Descrambled channel
+    """
+    N = channel.shape[0]
     for _ in range(iterations):
-        temp = np.copy(result)
+        new_channel = np.zeros_like(channel)
         for x in range(N):
             for y in range(N):
-                result[x, y] = temp[(2 * x - y) % N, (-x + y) % N]
-    return result
+                new_x = (2 * x - y) % N
+                new_y = (-x + y) % N
+                new_channel[new_x, new_y] = channel[x, y]
+        channel = new_channel
+    return channel
 
-def chaos_encrypt(data, r, seed):
-    sequence = logistic_map(seed, r, len(data))
-    encrypted_data = np.bitwise_xor(np.frombuffer(data, dtype=np.uint8), sequence)
-    return encrypted_data.tobytes()
-
-def chaos_decrypt(data, r, seed):
-    sequence = logistic_map(seed, r, len(data))
-    decrypted_data = np.bitwise_xor(np.frombuffer(data, dtype=np.uint8), sequence)
-    return decrypted_data.tobytes()
-
+# --- AES (CBC Mode) Encryption/Decryption Functions ---
 def aes_encrypt(data, key):
-    cipher = AES.new(key, AES.MODE_CBC)
-    ct_bytes = cipher.encrypt(pad(data, AES.block_size))
-    return cipher.iv + ct_bytes
+    """
+    AES encrypt data using CBC mode.
+    :param data: Data to encrypt (bytes)
+    :param key: 16-character AES key
+    :return: IV + ciphertext (bytes)
+    """
+    iv = get_random_bytes(16)
+    # Hash the key to get a valid 32-byte AES key
+    hashed_key = hashlib.sha256(key.encode()).digest()
+    cipher = AES.new(hashed_key, AES.MODE_CBC, iv)
+    return iv + cipher.encrypt(pad(data, AES.block_size))
 
 def aes_decrypt(data, key):
-    iv = data[:AES.block_size]
-    cipher = AES.new(key, AES.MODE_CBC, iv)
-    pt = unpad(cipher.decrypt(data[AES.block_size:]), AES.block_size)
-    return pt
+    """
+    AES decrypt data using CBC mode.
+    :param data: IV + ciphertext (bytes)
+    :param key: 16-character AES key
+    :return: Decrypted data (bytes)
+    """
+    iv = data[:16]
+    ciphertext = data[16:]
+    # Hash the key to get the same 32-byte AES key
+    hashed_key = hashlib.sha256(key.encode()).digest()
+    cipher = AES.new(hashed_key, AES.MODE_CBC, iv)
+    return unpad(cipher.decrypt(ciphertext), AES.block_size)
 
-def generate_key_file():
-    r = np.random.uniform(3.57, 4.0)
-    seed = np.random.uniform(0, 1)
-    aes_key = os.urandom(32)
-    with open("encryption.key", "wb") as f:
-        f.write(struct.pack('f', r))
-        f.write(struct.pack('f', seed))
-        f.write(aes_key)
-    return r, seed, aes_key
-
-def load_key_file(key_path):
-    with open(key_path, "rb") as f:
-        r = struct.unpack('f', f.read(4))[0]
-        seed = struct.unpack('f', f.read(4))[0]
-        aes_key = f.read(32)
-    return r, seed, aes_key
-
-def encrypt_file(file_path, r, seed, aes_key):
+# --- File Handling Functions --- 
+def encrypt_file(file_path, r, seed, aes_key, arnold_iter=5):
+    """
+    Encrypt a file (text/docx, pdf, or image).
+    :param file_path: Path to the file
+    :param r: Logistic map parameter
+    :param seed: Logistic map seed
+    :param aes_key: AES key
+    :param arnold_iter: Number of Arnold Cat Map iterations
+    """
     ext = os.path.splitext(file_path)[1].lower()
+    with open(file_path, 'rb') as f:
+        content = f.read()
+
     if ext in ['.txt', '.docx', '.pdf']:
-        with open(file_path, "rb") as f:
-            data = f.read()
-        encrypted_data = chaos_encrypt(data, r, seed)
-        final_data = aes_encrypt(encrypted_data, aes_key)
-        with open(file_path + ".enc", "wb") as f:
-            f.write(final_data)
+        # --- Text, Word Document, and PDF encryption ---
+        chaotic_seq = logistic_map(seed, r, len(content))
+        xored = xor_data(content, chaotic_seq)
+        encrypted = aes_encrypt(xored, aes_key)
+
+        out_path = file_path + ".enc"
+        with open(out_path, 'wb') as f:
+            f.write(encrypted)
+        print(f"[+] Encrypted file saved to: {out_path}")
+
+        os.remove(file_path)
+        print(f"[+] Original file {file_path} deleted.")
+
     elif ext in ['.jpg', '.jpeg', '.png']:
-        img = Image.open(file_path)
-        img = img.convert('RGB')
-        img_data = np.array(img)
-        if img_data.shape[0] != img_data.shape[1]:
-            min_side = min(img_data.shape[:2])
-            img_data = img_data[:min_side, :min_side]
-        img_data = arnold_cat_map(img_data, 5)
-        img_bytes = img_data.tobytes()
-        encrypted_bytes = chaos_encrypt(img_bytes, r, seed)
-        with open(file_path + ".enc", "wb") as f:  
-            f.write(encrypted_bytes)
-    else:
-        raise ValueError("Unsupported file format")
-    os.remove(file_path)
+        # --- Image encryption ---
+        image = cv2.imread(file_path, cv2.IMREAD_COLOR)
+        image = cv2.resize(image, (256, 256))  # Resize image to 256x256
 
+        scrambled = np.zeros_like(image)
+        for i in range(3):  # Scramble each BGR channel separately
+            scrambled[:, :, i] = arnold_cat_map(image[:, :, i], arnold_iter)
 
-def decrypt_file(file_path, r, seed, aes_key):
-    ext = os.path.splitext(file_path)[1].lower()
-    original_ext = os.path.splitext(file_path[:-4])[1].lower()
+        chaotic_seq = logistic_map(seed, r, scrambled.size)
+        xored = xor_data(scrambled.flatten(), chaotic_seq)
+        encrypted = aes_encrypt(xored, aes_key)
 
-    if original_ext in ['.txt', '.docx', '.pdf']:
-        with open(file_path, "rb") as f:
+        out_path = file_path + ".enc"
+        with open(out_path, 'wb') as f:
+            f.write(encrypted)
+        print(f"[+] Encrypted image saved to: {out_path}")
+
+        os.remove(file_path)
+        print(f"[+] Original image {file_path} deleted.")
+
+def decrypt_file(file_path, r, seed, aes_key, arnold_iter=5):
+    """
+    Decrypt a file (image or text/docx).
+    :param file_path: Path to encrypted file
+    :param r: Logistic map parameter
+    :param seed: Logistic map seed
+    :param aes_key: AES key
+    :param arnold_iter: Number of Arnold Cat Map iterations
+    :return: True if successful, False otherwise
+    """
+    if not os.path.exists(file_path):
+        print("[-] File not found. Please check the path.")
+        return False
+
+    try:
+        with open(file_path, 'rb') as f:
             data = f.read()
-        decrypted_data = aes_decrypt(data, aes_key)
-        final_data = chaos_decrypt(decrypted_data, r, seed)
-        with open(file_path[:-4], "wb") as f:
-            f.write(final_data)
-    elif original_ext in ['.jpg', '.jpeg', '.png']:
-        with open(file_path, "rb") as f:
-            encrypted_bytes = f.read()
-        decrypted_bytes = chaos_decrypt(encrypted_bytes, r, seed)
-        encrypted_img = np.frombuffer(decrypted_bytes, dtype=np.uint8)
-        size = int(np.sqrt(len(encrypted_img) / 3))
-        img_data = encrypted_img.reshape((size, size, 3))
-        img_data = inverse_arnold_cat_map(img_data, 5)
-        decrypted_img = Image.fromarray(img_data.astype(np.uint8))
-        decrypted_img.save(file_path[:-4])
-    else:
-        raise ValueError("Unsupported file format")
-    os.remove(file_path)
-    return True
 
-# --------------------------
-# Gradio Interface
-# --------------------------
+        if file_path.endswith('.enc'):
+            try:
+                decrypted = aes_decrypt(data, aes_key)
+                print(f"[+] AES decryption successful.")
+                
+                chaotic_seq = logistic_map(seed, r, len(decrypted))
+                xored = xor_data(decrypted, chaotic_seq)
+                print(f"[+] XORing completed.")
 
-def handle_encryption(file, key_file):
-    if file is None:
-        return "", "Please upload a file to encrypt."
+                try:
+                    # Try treating as image
+                    unscrambled = np.frombuffer(xored, dtype=np.uint8).reshape((256, 256, 3))
+                    final_img = np.zeros_like(unscrambled)
+                    for i in range(3):
+                        final_img[:, :, i] = inverse_arnold_cat_map(unscrambled[:, :, i], arnold_iter)
+
+                    out_path = file_path[:-4]
+                    cv2.imwrite(out_path, final_img)
+                    print(f"[+] Decrypted image saved to: {out_path}")
+                    os.remove(file_path)
+                    print(f"[+] Encrypted image {file_path} deleted.")
+                    return True
+
+                except ValueError:
+                    # If not image, treat as text/docx
+                    out_path = file_path.replace('.enc', '')
+                    with open(out_path, 'wb') as f:
+                        f.write(xored)
+                    print(f"[+] Decrypted text file saved to: {out_path}")
+                    os.remove(file_path)
+                    print(f"[+] Encrypted file {file_path} deleted.")
+                    return True
+
+            except Exception as e:
+                print(f"[-] Failed to decrypt file: {e}")
+                return False
+
+    except Exception as e:
+        print(f"[-] Error reading encrypted file: e{e}")
+        return False
     
-    if key_file is None:
-        r, seed, aes_key = generate_key_file()
-    else:
-        key_path = key_file.name
-        r, seed, aes_key = load_key_file(key_path)
+def get_key_from_password(password):
+    return hashlib.sha256(password.encode()).digest()[:16]
 
-    file_path = file.name
-    encrypt_file(file_path, r, seed, aes_key)
+def generate_key_file(key_path="encryption.key.enc", password=""):
+    r = round(random.uniform(3.57, 4.0), 4)
+    seed = round(random.uniform(0.01, 0.99), 6)
+    aes_key = ''.join(random.choices(string.ascii_letters + string.digits, k=16))
 
-    encrypted_file_path = file_path + ".enc"
-    if os.path.exists(encrypted_file_path):
-        return encrypted_file_path, "✅ Encryption Successful!"
-    else:
-        return "", "❌ Encryption Failed."
+    key_data = json.dumps({"r": r, "seed": seed, "aes_key": aes_key}).encode()
+    encryption_key = get_key_from_password(password)
+    encrypted_key = aes_encrypt(key_data, encryption_key.decode(errors='ignore'))
 
-def handle_decryption(file, key_file):
-    if file is None or key_file is None:
-        return "", "Please upload both the encrypted file and key file."
+    with open(key_path, "wb") as f:
+        f.write(encrypted_key)
 
-    file_path = file.name
-    key_path = key_file.name
+    print(f"[+] Encrypted key file saved as: {key_path}")
+    return r, seed, aes_key
 
-    r, seed, aes_key = load_key_file(key_path)
-    success = decrypt_file(file_path, r, seed, aes_key)
+def load_key_file(key_path, password):
+    encryption_key = get_key_from_password(password)
+    with open(key_path, "rb") as f:
+        encrypted_data = f.read()
+    decrypted = aes_decrypt(encrypted_data, encryption_key.decode(errors='ignore'))
+    key_data = json.loads(decrypted.decode())
+    print(f"[+] Loaded and decrypted key file from: {key_path}")
+    return key_data["r"], key_data["seed"], key_data["aes_key"]
 
-    if success:
-        decrypted_file_path = file_path[:-4]
-        return decrypted_file_path, "✅ Decryption Successful!"
-    else:
-        return "", "❌ Decryption Failed."
+def process_file(file_path, mode, password, use_existing_key, key_file=None):
+    try:
+        if use_existing_key and key_file:
+            # Load existing key
+            r, seed, aes_key = load_key_file(key_file.name, password)
+        else:
+            # Generate new key
+            r, seed, aes_key = generate_key_file(password=password)
+            key_path = os.path.join(tempfile.gettempdir(), "encryption.key.enc")
+            with open(key_path, "wb") as f:
+                f.write(aes_encrypt(json.dumps({"r": r, "seed": seed, "aes_key": aes_key}).encode(), 
+                                  get_key_from_password(password).decode(errors='ignore')))
+            key_file = key_path
 
-def generate_keyfile_button():
-    r, seed, aes_key = generate_key_file()
-    keyfile_path = "encryption.key"
-    return keyfile_path
-
-# Gradio App
-
-with gr.Blocks() as demo:
-    gr.Markdown("## 🔐 Chaos + AES Encryption Tool")
-
-    with gr.Row():
-        with gr.Column():
-            file_input = gr.File(label="Upload File to Encrypt/Decrypt")
-            key_input = gr.File(label="Upload Key File (.key)")
-            operation = gr.Radio(["Encrypt", "Decrypt"], value="Encrypt", label="Choose Operation")
-            run_btn = gr.Button("Run")
+        if mode == "Encrypt":
+            encrypt_file(file_path.name, r, seed, aes_key)
+            output_file = file_path.name + ".enc"
+            message = f"File encrypted successfully! Encrypted file saved as {output_file}"
+        else:
+            success = decrypt_file(file_path.name, r, seed, aes_key)
+            if success:
+                output_file = file_path.name.replace('.enc', '')
+                message = f"File decrypted successfully! Decrypted file saved as {output_file}"
+            else:
+                return "Decryption failed. Please check your password or key file.", None, None
         
-        with gr.Column():
-            output_file = gr.File(label="Download Result")
-            output_text = gr.Textbox(label="Status")
+        return message, output_file, key_file if not use_existing_key else None
+    
+    except Exception as e:
+        return f"Error: {str(e)}", None, None
 
+# Gradio Interface
+with gr.Blocks(title="File Encryption Tool") as demo:
+    gr.Markdown("""
+    # Secure File Encryption Tool
+    This tool encrypts and decrypts files using chaotic algorithms and AES encryption.
+    """)
+    
     with gr.Row():
-        key_gen_btn = gr.Button("Generate New Key File")
-        key_gen_output = gr.File(label="Download Generated Key File")
-
-    run_btn.click(
-        lambda file, key, op: handle_encryption(file, key) if op == "Encrypt" else handle_decryption(file, key),
-        inputs=[file_input, key_input, operation],
-        outputs=[output_file, output_text]
+        with gr.Column():
+            file_input = gr.File(label="Select File")
+            mode = gr.Radio(["Encrypt", "Decrypt"], label="Mode", value="Encrypt")
+            password = gr.Textbox(label="Password", type="password")
+            use_existing_key = gr.Checkbox(label="Use existing key file", value=False)
+            key_file = gr.File(label="Key File", visible=False)
+            
+            submit_btn = gr.Button("Process File")
+            
+        with gr.Column():
+            output_message = gr.Textbox(label="Status")
+            output_file = gr.File(label="Download Processed File")
+            new_key_file = gr.File(label="Download New Key File", visible=False)
+    
+    # Show/hide key file input based on checkbox
+    use_existing_key.change(
+        lambda x: gr.File(visible=x),
+        inputs=use_existing_key,
+        outputs=key_file
+    )
+    
+    submit_btn.click(
+        process_file,
+        inputs=[file_input, mode, password, use_existing_key, key_file],
+        outputs=[output_message, output_file, new_key_file]
+    )
+    
+    # Show/hide new key file output when not using existing key
+    mode.change(
+        lambda x: gr.File(visible=not x),
+        inputs=use_existing_key,
+        outputs=new_key_file
     )
 
-    key_gen_btn.click(
-        fn=generate_keyfile_button,
-        outputs=key_gen_output
-    )
-
+if __name__ == "__main__":
     demo.launch()

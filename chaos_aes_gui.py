@@ -11,6 +11,8 @@ import json
 import random
 import string
 from PyPDF2 import PdfReader, PdfWriter  # Import PDF handling libraries
+import hashlib
+from getpass import getpass
 
 # --- Chaos Functions ---
 def logistic_map(seed, r, size):
@@ -82,10 +84,11 @@ def aes_encrypt(data, key):
     :param key: 16-character AES key
     :return: IV + ciphertext (bytes)
     """
-    iv = get_random_bytes(16)  # 16 bytes IV
-    cipher = AES.new(key.encode(), AES.MODE_CBC, iv)
-    ciphertext = cipher.encrypt(pad(data, AES.block_size))
-    return iv + ciphertext
+    iv = get_random_bytes(16)
+    # Hash the key to get a valid 32-byte AES key
+    hashed_key = hashlib.sha256(key.encode()).digest()
+    cipher = AES.new(hashed_key, AES.MODE_CBC, iv)
+    return iv + cipher.encrypt(pad(data, AES.block_size))
 
 def aes_decrypt(data, key):
     """
@@ -96,7 +99,9 @@ def aes_decrypt(data, key):
     """
     iv = data[:16]
     ciphertext = data[16:]
-    cipher = AES.new(key.encode(), AES.MODE_CBC, iv)
+    # Hash the key to get the same 32-byte AES key
+    hashed_key = hashlib.sha256(key.encode()).digest()
+    cipher = AES.new(hashed_key, AES.MODE_CBC, iv)
     return unpad(cipher.decrypt(ciphertext), AES.block_size)
 
 # --- File Handling Functions --- 
@@ -206,79 +211,58 @@ def decrypt_file(file_path, r, seed, aes_key, arnold_iter=5):
     except Exception as e:
         print(f"[-] Error reading encrypted file: e{e}")
         return False
+    
+def get_key_from_password(password):
+    return hashlib.sha256(password.encode()).digest()[:16]
 
-# --- Key File Functions ---
-def generate_key_file(key_path="encryption.key"):
-    """
-    Generate a new key file (r, seed, AES key).
-    :param key_path: Path to save key file
-    :return: r, seed, aes_key
-    """
-    if os.path.exists(key_path):
-        # Handle multiple key files
-        base, ext = os.path.splitext(key_path)
-        counter = 1
-        new_key_path = f"{base}_{counter}{ext}"
-        while os.path.exists(new_key_path):
-            counter += 1
-            new_key_path = f"{base}_{counter}{ext}"
-        key_path = new_key_path
+def generate_key_file(key_path="encryption.key.enc", password=""):
+    r = round(random.uniform(3.57, 4.0), 4)
+    seed = round(random.uniform(0.01, 0.99), 6)
+    aes_key = ''.join(random.choices(string.ascii_letters + string.digits, k=16))
 
-    r = round(random.uniform(3.57, 4.0), 4)  # Chaotic r value
-    seed = round(random.uniform(0.01, 0.99), 6)  # Seed value
-    aes_key = ''.join(random.choices(string.ascii_letters + string.digits, k=16))  # 16-char AES key
+    key_data = json.dumps({"r": r, "seed": seed, "aes_key": aes_key}).encode()
+    encryption_key = get_key_from_password(password)
+    encrypted_key = aes_encrypt(key_data, encryption_key.decode(errors='ignore'))
 
-    key_data = {
-        "r": r,
-        "seed": seed,
-        "aes_key": aes_key
-    }
+    with open(key_path, "wb") as f:
+        f.write(encrypted_key)
 
-    with open(key_path, "w") as f:
-        json.dump(key_data, f)
-
-    print(f"[+] Key file saved as: {key_path}")
+    print(f"[+] Encrypted key file saved as: {key_path}")
     return r, seed, aes_key
 
-def load_key_file(key_path):
-    """
-    Load an existing key file.
-    :param key_path: Path of the key file
-    :return: r, seed, aes_key
-    """
-    with open(key_path, "r") as f:
-        key_data = json.load(f)
-    print(f"[+] Loaded key from: {key_path}")
+def load_key_file(key_path, password):
+    encryption_key = get_key_from_password(password)
+    with open(key_path, "rb") as f:
+        encrypted_data = f.read()
+    decrypted = aes_decrypt(encrypted_data, encryption_key.decode(errors='ignore'))
+    key_data = json.loads(decrypted.decode())
+    print(f"[+] Loaded and decrypted key file from: {key_path}")
     return key_data["r"], key_data["seed"], key_data["aes_key"]
 
 # --- Main Interface ---
-if __name__ == "__main__":  # <-- NOTE: You had _name_ wrong. Correct is __name__ with double underscores.
+if __name__ == "__main__":
     file_path = input("Enter file path to encrypt/decrypt: ").strip()
     mode = input("Mode (e = encrypt / d = decrypt): ").strip().lower()
     key_choice = input("Use existing key file? (y/n): ").strip().lower()
 
     if key_choice == 'y':
-        key_path = input("Enter key file path (e.g., encryption.key): ").strip()
-        if not key_path or not os.path.exists(key_path):
-            print("[-] Key file path is invalid or does not exist. Exiting.")
+        key_path = input("Enter key file path (e.g., encryption.key.enc): ").strip()
+        if not os.path.exists(key_path):
+            print("[-] Key file path invalid. Exiting.")
             exit(1)
-        r, seed, aes_key = load_key_file(key_path)
+        password = getpass("Enter password to decrypt the key file: ").strip()
+        r, seed, aes_key = load_key_file(key_path, password)
     else:
-        key_path = None
-        r, seed, aes_key = generate_key_file()
+        password = getpass("Enter password to encrypt new key file: ").strip()
+        r, seed, aes_key = generate_key_file(password=password)
+        key_path = "encryption.key.enc"
 
     if mode == 'e':
         encrypt_file(file_path, r, seed, aes_key)
-
     elif mode == 'd':
         success = decrypt_file(file_path, r, seed, aes_key)
-
-        # Delete key file after successful decryption
         if success and key_choice == 'y' and os.path.exists(key_path):
             os.remove(key_path)
             print(f"[+] Key file {key_path} deleted.")
-        elif not success:
-            print("[-] Decryption failed.")
-
     else:
-        print("Invalid mode. Use 'e' for encrypt or 'd' for decrypt.")
+        print("[-] Invalid mode. Use 'e' or 'd'.")
